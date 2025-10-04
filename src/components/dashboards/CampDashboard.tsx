@@ -33,7 +33,8 @@ interface CampDashboardProps {
 }
 
 const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
-  const [camp, setCamp] = useState<Camp | null>(null);
+  const [camps, setCamps] = useState<Camp[]>([]);
+  const [selectedCamp, setSelectedCamp] = useState<Camp | null>(null);
   const [needs, setNeeds] = useState<Need[]>([]);
   const [showCampDialog, setShowCampDialog] = useState(false);
   const [showNeedDialog, setShowNeedDialog] = useState(false);
@@ -48,17 +49,20 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const { data: campData, error: campError } = await supabase
+      const { data: campsData, error: campsError } = await supabase
         .from("camps")
         .select("*")
         .eq("camp_admin_id", user.id)
-        .maybeSingle();
+        .order("created_at", { ascending: false });
 
-      if (campError) throw campError;
+      if (campsError) throw campsError;
 
-      if (campData) {
-        setCamp(campData);
-        await fetchNeeds(campData.id);
+      setCamps(campsData || []);
+      
+      // If there are camps and no selected camp, select the first one
+      if (campsData && campsData.length > 0 && !selectedCamp) {
+        setSelectedCamp(campsData[0]);
+        await fetchNeeds(campsData[0].id);
       }
     } catch (error) {
       console.error("Error fetching camp data:", error);
@@ -106,7 +110,8 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
 
       if (error) throw error;
 
-      setCamp(data);
+      setCamps(prev => [data, ...prev]);
+      setSelectedCamp(data);
       setShowCampDialog(false);
       toast.success("Camp created successfully!");
     } catch (error: any) {
@@ -116,13 +121,13 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
 
   const handleAddNeed = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!camp) return;
+    if (!selectedCamp) return;
 
     const formData = new FormData(e.currentTarget);
 
     try {
       const { error } = await supabase.from("camp_needs").insert({
-        camp_id: camp.id,
+        camp_id: selectedCamp.id,
         item_name: formData.get("item") as string,
         quantity_needed: parseInt(formData.get("quantity") as string),
         urgency: formData.get("urgency") as string,
@@ -130,12 +135,17 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
 
       if (error) throw error;
 
-      await fetchNeeds(camp.id);
+      await fetchNeeds(selectedCamp.id);
       setShowNeedDialog(false);
       toast.success("Need added successfully!");
     } catch (error: any) {
       toast.error(error.message || "Failed to add need");
     }
+  };
+
+  const handleCampSelect = async (camp: Camp) => {
+    setSelectedCamp(camp);
+    await fetchNeeds(camp.id);
   };
 
   const urgencyColor = (urgency: string) => {
@@ -158,7 +168,7 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
     );
   }
 
-  if (!camp) {
+  if (camps.length === 0) {
     return (
       <div className="container mx-auto p-4">
         <div className="flex justify-between items-center mb-6">
@@ -224,19 +234,97 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
     );
   }
 
-  const availableSeats = camp.total_capacity - camp.occupied_seats;
+  if (!selectedCamp) {
+    return (
+      <div className="container mx-auto p-4">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold">Camp Management</h1>
+          <Button variant="outline" onClick={onSignOut}>
+            <LogOut className="w-4 h-4 mr-2" />
+            Sign Out
+          </Button>
+        </div>
+        <div className="text-center py-8">
+          <p className="text-muted-foreground">No camp selected</p>
+        </div>
+      </div>
+    );
+  }
+
+  const availableSeats = selectedCamp.total_capacity - selectedCamp.occupied_seats;
 
   return (
     <div className="container mx-auto p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h1 className="text-3xl font-bold">{camp.name}</h1>
-          <p className="text-muted-foreground">{camp.location}</p>
+          <h1 className="text-3xl font-bold">{selectedCamp.name}</h1>
+          <p className="text-muted-foreground">{selectedCamp.location}</p>
         </div>
-        <Button variant="outline" onClick={onSignOut}>
-          <LogOut className="w-4 h-4 mr-2" />
-          Sign Out
-        </Button>
+        <div className="flex gap-2">
+          <Dialog open={showCampDialog} onOpenChange={setShowCampDialog}>
+            <DialogTrigger asChild>
+              <Button variant="outline">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Camp
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Create New Relief Camp</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleCreateCamp} className="space-y-4">
+                <div>
+                  <Label htmlFor="name">Camp Name</Label>
+                  <Input id="name" name="name" required />
+                </div>
+                <div>
+                  <Label htmlFor="location">Location</Label>
+                  <Input id="location" name="location" required />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="capacity">Total Capacity</Label>
+                    <Input id="capacity" name="capacity" type="number" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="occupied">Occupied Seats</Label>
+                    <Input id="occupied" name="occupied" type="number" defaultValue="0" required />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="phone">Contact Phone</Label>
+                  <Input id="phone" name="phone" type="tel" required />
+                </div>
+                <div>
+                  <Label htmlFor="email">Contact Email (Optional)</Label>
+                  <Input id="email" name="email" type="email" />
+                </div>
+                <Button type="submit" className="w-full">Create Camp</Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+          {camps.length > 1 && (
+            <Select value={selectedCamp.id} onValueChange={(campId) => {
+              const camp = camps.find(c => c.id === campId);
+              if (camp) handleCampSelect(camp);
+            }}>
+              <SelectTrigger className="w-48">
+                <SelectValue placeholder="Select camp" />
+              </SelectTrigger>
+              <SelectContent>
+                {camps.map((camp) => (
+                  <SelectItem key={camp.id} value={camp.id}>
+                    {camp.name} - {camp.location}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button variant="outline" onClick={onSignOut}>
+            <LogOut className="w-4 h-4 mr-2" />
+            Sign Out
+          </Button>
+        </div>
       </div>
 
       <div className="grid md:grid-cols-3 gap-6 mb-6">
@@ -246,7 +334,7 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{camp.total_capacity}</div>
+            <div className="text-2xl font-bold">{selectedCamp.total_capacity}</div>
           </CardContent>
         </Card>
         <Card>
@@ -255,7 +343,7 @@ const CampDashboard = ({ onSignOut }: CampDashboardProps) => {
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{camp.occupied_seats}</div>
+            <div className="text-2xl font-bold">{selectedCamp.occupied_seats}</div>
           </CardContent>
         </Card>
         <Card>
